@@ -120,6 +120,24 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- 12. Tabel saas_settings (Konfigurasi global parameter SaaS)
+-- Dulu disimpan di file data/saas_settings.json. Dipindah ke database karena
+-- filesystem pada Vercel (serverless) bersifat read-only.
+CREATE TABLE IF NOT EXISTS saas_settings (
+    id SERIAL PRIMARY KEY,
+    code_len INTEGER DEFAULT 3 CHECK (code_len BETWEEN 2 AND 4),
+    expiry_minutes INTEGER DEFAULT 10,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Pastikan selalu ada tepat satu baris konfigurasi.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM saas_settings LIMIT 1) THEN
+        INSERT INTO saas_settings (code_len, expiry_minutes) VALUES (3, 10);
+    END IF;
+END $$;
+
 -- --------------------------------------------------------------
 -- MEMBUAT INDEX UNTUK OPTIMASI PERFORMA
 -- --------------------------------------------------------------
@@ -161,6 +179,7 @@ ALTER TABLE merchant_qris ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE webhook_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saas_settings ENABLE ROW LEVEL SECURITY;
 
 -- Kebijakan RLS agar pengguna hanya bisa membaca/mengubah data miliknya
 DROP POLICY IF EXISTS "Users can view their own data" ON users;

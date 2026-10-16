@@ -1,6 +1,9 @@
 # Dependency directories
 node_modules/
 
+# Vercel
+.vercel
+
 # Local env files
 .env
 .env.local

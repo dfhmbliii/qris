@@ -9,7 +9,6 @@ if (typeof dns.setDefaultResultOrder === 'function') {
 const express = require('express');
 
 const path = require('path');
-const fs = require('fs');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
@@ -21,50 +20,96 @@ const QRCode = require('qrcode');
 // Import Service Fonnte & Supabase
 const { sendWhatsAppMessage } = require('./src/services/fonnteService');
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');
+const { waitUntil } = require('@vercel/functions');
 
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-    realtime: {
-        transport: ws
-    }
-});
+
+// Di Vercel, process.env hanya diisi pada saat build/runtime request pertama.
+// Jangan sampai crash kalau env belum ada, biarkan request yang gagal dengan pesan jelas.
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.warn('[Peringatan] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY belum di-set. API akan gagal sampai env var dikonfigurasi.');
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'rahasia_super_aman_123';
 
-// Folder-folder setup
-const uploadDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadDir)) {
-    fs.mkdirSync(uploadDir);
-}
-const dataDir = path.join(__dirname, 'data');
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir);
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    if (process.env.VERCEL) {
+        throw new Error('JWT_SECRET wajib diset sebagai environment variable di Vercel.');
+    }
+    console.warn('[Peringatan] JWT_SECRET kosong, memakai fallback development. JANGAN gunakan di production.');
 }
 
-const SETTINGS_FILE_PATH = path.join(dataDir, 'saas_settings.json');
+const devJwtSecret = 'rahasia_super_aman_123';
+const SECRET = JWT_SECRET || devJwtSecret;
 
-function getSaaSSettings() {
+const DEFAULT_SETTINGS = { code_len: 3, expiry_minutes: 10 };
+
+// Cache in-memory: parameter SaaS jarang berubah, dan filesystem Vercel bersifat read-only.
+let settingsCache = null;
+let settingsCacheAt = 0;
+const SETTINGS_TTL_MS = 30 * 1000;
+
+async function getSaaSSettings() {
+    if (settingsCache && Date.now() - settingsCacheAt < SETTINGS_TTL_MS) {
+        return settingsCache;
+    }
     try {
-        if (fs.existsSync(SETTINGS_FILE_PATH)) {
-            const data = fs.readFileSync(SETTINGS_FILE_PATH, 'utf-8');
-            return JSON.parse(data);
+        const { data, error } = await supabase
+            .from('saas_settings')
+            .select('code_len, expiry_minutes')
+            .order('id', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+        if (error) throw error;
+
+        if (data) {
+            settingsCache = {
+                code_len: Number(data.code_len) || DEFAULT_SETTINGS.code_len,
+                expiry_minutes: Number(data.expiry_minutes) || DEFAULT_SETTINGS.expiry_minutes
+            };
         }
     } catch (err) {
-        console.error('Gagal membaca saas_settings.json:', err);
+        console.error('Gagal membaca saas_settings dari Supabase:', err.message);
     }
-    return { code_len: 3, expiry_minutes: 10 };
+
+    settingsCacheAt = Date.now();
+    return settingsCache || DEFAULT_SETTINGS;
 }
 
-function saveSaaSSettings(settings) {
+async function saveSaaSSettings(settings) {
+    const row = {
+        code_len: Number(settings.code_len),
+        expiry_minutes: Number(settings.expiry_minutes)
+    };
+
     try {
-        fs.writeFileSync(SETTINGS_FILE_PATH, JSON.stringify(settings, null, 2), 'utf-8');
+        const { data: existing, error: selErr } = await supabase
+            .from('saas_settings')
+            .select('id')
+            .order('id', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+        if (selErr) throw selErr;
+
+        if (existing) {
+            const { error } = await supabase.from('saas_settings').update(row).eq('id', existing.id);
+            if (error) throw error;
+        } else {
+            const { error } = await supabase.from('saas_settings').insert(row);
+            if (error) throw error;
+        }
+
+        settingsCache = row;
+        settingsCacheAt = Date.now();
         return true;
     } catch (err) {
-        console.error('Gagal menulis saas_settings.json:', err);
+        console.error('Gagal menyimpan saas_settings ke Supabase:', err.message);
         return false;
     }
 }
@@ -73,8 +118,22 @@ function saveSaaSSettings(settings) {
 // PURE JAVASCRIPT CORS & SECURITY MIDDLEWARES
 // --------------------------------------------------------------
 app.use(express.json());
+
+// Daftar origin yang diizinkan. Kosong = semua origin (perilaku lama).
+// Di production, isi ALLOWED_ORIGINS dengan domain Anda sendiri, dipisah koma.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+
 app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (ALLOWED_ORIGINS.length === 0) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    } else if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-api-key, x-secret-key');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -86,8 +145,8 @@ app.use((req, res, next) => {
     next();
 });
 
+// Aset statis ikut di-bundle bersama function (lihat includeFiles di vercel.json)
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routing URL Bersih (Clean URLs) untuk UI Halaman HTML
 app.get('/gateway', (req, res) => {
@@ -124,15 +183,9 @@ function rateLimiter(keyPrefix, limit, windowMs) {
 }
 
 // Multer storage untuk QRIS Upload
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadDir);
-    },
-    filename: function (req, file, cb) {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, 'qris-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
+// PENTING: pakai memoryStorage, bukan diskStorage. Filesystem Vercel read-only
+// sehingga file tidak bisa ditulis ke folder uploads/.
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
     const allowedMimeTypes = ['image/jpeg', 'image/png', 'image/jpg'];
@@ -158,7 +211,7 @@ const authenticateJWT = (req, res, next) => {
 
     if (!token) return res.status(401).json({ success: false, message: 'Akses ditolak. Token tidak ditemukan.' });
 
-    jwt.verify(token, JWT_SECRET, (err, user) => {
+    jwt.verify(token, SECRET, (err, user) => {
         if (err) return res.status(403).json({ success: false, message: 'Sesi berakhir atau token tidak valid.' });
         req.user = user;
         next();
@@ -451,7 +504,7 @@ app.post('/api/auth/login', rateLimiter('login', 5, 60 * 1000), async (req, res)
             merchantId: merchant.id
         };
 
-        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1d' });
+        const token = jwt.sign(tokenPayload, SECRET, { expiresIn: '1d' });
 
         await createAuditLog(user.id, 'LOGIN', 'Berhasil login menggunakan password', req);
 
@@ -515,7 +568,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
             merchantId: merchant.id
         };
 
-        const token = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: '1d' });
+        const token = jwt.sign(tokenPayload, SECRET, { expiresIn: '1d' });
 
         await createAuditLog(user.id, 'LOGIN', 'Berhasil login melalui verifikasi OTP WA', req);
 
@@ -564,7 +617,10 @@ app.post('/api/auth/forgot-password', rateLimiter('forgot-pass', 1, 3 * 60 * 100
         });
 
         // Kirim link reset via Fonnte
-        const resetLink = `${req.protocol}://${req.get('host')}/reset-password.html?token=${resetToken}`;
+        // APP_BASE_URL dipakai jika di-set, agar link tetap benar saat di belakang proxy/CDN.
+        const baseUrl = (process.env.APP_BASE_URL || '').replace(/\/+$/, '') || `${req.protocol}://${req.get('host')}`;
+        // Form reset ada di halaman utama (index.html) dan membaca ?token= dari query string.
+        const resetLink = `${baseUrl}/?token=${resetToken}`;
         const msgText = `[Web Gateway QRIS]\nAnda meminta perubahan password. Silakan klik tautan di bawah ini untuk membuat password baru:\n\n${resetLink}\n\nLink ini hanya berlaku selama 15 menit.`;
         const waResult = await sendWhatsAppMessage(cleanNumber, msgText);
 
@@ -707,11 +763,9 @@ app.post('/api/merchant/qris/decode', authenticateJWT, upload.single('qris_image
         return res.status(400).json({ success: false, message: 'File gambar QRIS merchant wajib diunggah.' });
     }
 
-    const localFilePath = req.file.path;
-
     try {
-        // Dekode gambar menggunakan Jimp & jsQR
-        const image = await Jimp.read(localFilePath);
+        // Dekode gambar langsung dari memory buffer (tanpa menulis ke disk)
+        const image = await Jimp.read(req.file.buffer);
         const { data, width, height } = image.bitmap;
         const code = jsQR(new Uint8ClampedArray(data), width, height);
 
@@ -724,9 +778,6 @@ app.post('/api/merchant/qris/decode', authenticateJWT, upload.single('qris_image
             throw new Error('QR Code terdeteksi tetapi bukan format QRIS standar (harus diawali 000201).');
         }
 
-        // Hapus file lokal setelah selesai di-decode
-        fs.unlinkSync(localFilePath);
-
         res.json({
             success: true,
             message: 'QRIS berhasil dideteksi dan didekode.',
@@ -734,9 +785,6 @@ app.post('/api/merchant/qris/decode', authenticateJWT, upload.single('qris_image
             filename: req.file.originalname
         });
     } catch (err) {
-        if (fs.existsSync(localFilePath)) {
-            fs.unlinkSync(localFilePath);
-        }
         res.status(400).json({ success: false, message: err.message });
     }
 });
@@ -815,7 +863,7 @@ app.post('/api/merchant/qris', authenticateJWT, async (req, res) => {
 // SaaS Settings: Get Config
 app.get('/api/saas-settings', authenticateJWT, async (req, res) => {
     try {
-        const settings = getSaaSSettings();
+        const settings = await getSaaSSettings();
         res.json({ success: true, data: settings });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -830,14 +878,14 @@ app.post('/api/saas-settings', authenticateJWT, async (req, res) => {
     }
 
     try {
-        const success = saveSaaSSettings({
+        const success = await saveSaaSSettings({
             code_len: Number(code_len),
             expiry_minutes: Number(expiry_minutes)
         });
         if (success) {
             res.json({ success: true, message: 'Pengaturan SaaS berhasil disimpan.' });
         } else {
-            res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan ke file.' });
+            res.status(500).json({ success: false, message: 'Gagal menyimpan pengaturan ke database. Pastikan tabel saas_settings sudah dibuat di Supabase.' });
         }
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -1167,7 +1215,7 @@ app.post('/api/merchant/payment/generate', authenticateJWT, async (req, res) => 
         }
 
         const baseAmountNum = Number(amount);
-        const settings = getSaaSSettings();
+        const settings = await getSaaSSettings();
         let codeLen = Number(settings.code_len) || 3;
         const requestedCodeLen = req.body.codeLen || req.body.code_len;
         if (requestedCodeLen && [2, 3, 4].includes(Number(requestedCodeLen))) {
@@ -1286,7 +1334,7 @@ app.post('/api/payment/generate-qris', authenticateApiKey, async (req, res) => {
         }
 
         const baseAmountNum = Number(amount);
-        const settings = getSaaSSettings();
+        const settings = await getSaaSSettings();
         let codeLen = Number(settings.code_len) || 3;
         const requestedCodeLen = req.body.codeLen || req.body.code_len;
         if (requestedCodeLen && [2, 3, 4].includes(Number(requestedCodeLen))) {
@@ -1516,7 +1564,7 @@ app.all(['/api/webhook/payment', '/api/webhook/payment/:merchantId'], async (req
             return res.json({ success: true, message: 'Notifikasi diabaikan karena tidak mengandung nominal.' });
         }
 
-        const settings = getSaaSSettings();
+        const settings = await getSaaSSettings();
         const expiryMinutes = Number(settings.expiry_minutes) || 10;
         // Gunakan minimal 15 menit atau waktu expired yang diatur
         const limitMinutes = Math.max(15, expiryMinutes);
@@ -1626,35 +1674,39 @@ app.all(['/api/webhook/payment', '/api/webhook/payment/:merchantId'], async (req
             const signature = hmac.digest('hex');
             webhookPayload.signature = signature;
 
-            // Lakukan pemanggilan (dispatch) secara asinkron (background)
-            fetch(wSettings.url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(webhookPayload)
-            })
-                .then(async (hookRes) => {
-                    const responseStatus = hookRes.status;
-                    const responseBody = await hookRes.text();
-
-                    await supabase.from('webhook_logs').insert({
-                        transaction_id: targetTrx.id,
-                        payload: webhookPayload,
-                        response_status: responseStatus,
-                        response_body: responseBody.slice(0, 1000),
-                        attempts: 1,
-                        status: hookRes.ok ? 'SUCCESS' : 'FAILED'
-                    });
+            // Lakukan pemanggilan (dispatch) di background.
+            // Di Vercel, instance akan di-freeze setelah response terkirim, jadi
+            // pekerjaan background WAJIB dibungkus waitUntil().
+            waitUntil(
+                fetch(wSettings.url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(webhookPayload)
                 })
-                .catch(async (postErr) => {
-                    await supabase.from('webhook_logs').insert({
-                        transaction_id: targetTrx.id,
-                        payload: webhookPayload,
-                        response_status: 500,
-                        response_body: postErr.message,
-                        attempts: 1,
-                        status: 'FAILED'
-                    });
-                });
+                    .then(async (hookRes) => {
+                        const responseStatus = hookRes.status;
+                        const responseBody = await hookRes.text();
+
+                        await supabase.from('webhook_logs').insert({
+                            transaction_id: targetTrx.id,
+                            payload: webhookPayload,
+                            response_status: responseStatus,
+                            response_body: responseBody.slice(0, 1000),
+                            attempts: 1,
+                            status: hookRes.ok ? 'SUCCESS' : 'FAILED'
+                        });
+                    })
+                    .catch(async (postErr) => {
+                        await supabase.from('webhook_logs').insert({
+                            transaction_id: targetTrx.id,
+                            payload: webhookPayload,
+                            response_status: 500,
+                            response_body: postErr.message,
+                            attempts: 1,
+                            status: 'FAILED'
+                        });
+                    })
+            );
         }
 
         res.json({ success: true, message: 'Webhook diproses dan dicocokkan.' });
@@ -1663,24 +1715,29 @@ app.all(['/api/webhook/payment', '/api/webhook/payment/:merchantId'], async (req
     }
 });
 
-// Server listener
-const server = app.listen(PORT, () => {
-    console.log(`===============================================`);
-    console.log(`🚀 Gateway Pembayaran SaaS Webhook Aktif!`);
-    console.log(`🌐 Akses panel di: http://localhost:${PORT}`);
-    console.log(`===============================================`);
-});
+// Ekspor app agar bisa dipakai oleh serverless function Vercel (api/index.js).
+// app.listen() hanya dijalankan saat file ini dijalankan langsung (node server.js).
+module.exports = app;
 
-server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-        console.error(`===============================================`);
-        console.error(`❌ Gagal memulai server: Port ${PORT} sudah digunakan!`);
-        console.error(`💡 Tips: Silakan matikan proses node lain yang sedang berjalan`);
-        console.error(`   atau ubah PORT di file .env Anda.`);
-        console.error(`===============================================`);
-    } else {
-        console.error('❌ Terjadi kesalahan pada server:', err.message);
-    }
-    process.exit(1);
-});
+if (require.main === module) {
+    const server = app.listen(PORT, () => {
+        console.log(`===============================================`);
+        console.log(`🚀 Gateway Pembayaran SaaS Webhook Aktif!`);
+        console.log(`🌐 Akses panel di: http://localhost:${PORT}`);
+        console.log(`===============================================`);
+    });
+
+    server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+            console.error(`===============================================`);
+            console.error(`❌ Gagal memulai server: Port ${PORT} sudah digunakan!`);
+            console.error(`💡 Tips: Silakan matikan proses node lain yang sedang berjalan`);
+            console.error(`   atau ubah PORT di file .env Anda.`);
+            console.error(`===============================================`);
+        } else {
+            console.error('❌ Terjadi kesalahan pada server:', err.message);
+        }
+        process.exit(1);
+    });
+}
 

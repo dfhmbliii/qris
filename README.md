@@ -42,8 +42,8 @@ Aplikasi ini sangat cocok bagi pelaku bisnis online yang ingin mengintegrasikan 
 
 ```text
 autopost/
-├── data/                    # Penyimpanan data JSON konfigurasi SaaS
-│   └── saas_settings.json   # Pengaturan durasi kedaluwarsa & panjang kode nominal
+├── data/                    # Skema database & data lokal
+│   └── supabase_schema.sql # Skema SQL untuk Supabase (termasuk tabel saas_settings)
 ├── public/                  # Static files untuk UI Front-End
 │   ├── css/                 # Styling kustom (Vanilla CSS)
 │   ├── js/                  # Logic JavaScript untuk interaksi API
@@ -55,13 +55,82 @@ autopost/
 │   └── services/            # Modul helper dan integrasi pihak ketiga
 │       ├── fonnteService.js # Integrasi pengiriman pesan & OTP WhatsApp via Fonnte
 │       └── qrService.js     # Helper decode QR Code gambar ke string QRIS
-├── uploads/                 # Folder penyimpanan sementara unggahan QRIS
+├── api/                    # Entry point serverless function untuk Vercel
+│   └── index.js             # Meneruskan (req, res) ke Express app
+├── uploads/                 # (hanya lokal) folder penyimpanan sementara unggahan QRIS
 ├── .env                     # File konfigurasi sensitif (diabaikan oleh git)
 ├── .env.example             # Template konfigurasi environment variables
 ├── .gitignore               # Berkas untuk mengabaikan folder sensitif dari Git
+├── vercel.json              # Konfigurasi rewrite & serverless function Vercel
 ├── package.json             # Dependensi npm & metadata proyek
 ├── server.js                # Entry point utama aplikasi Express
 └── test-api.js              # Script testing untuk API endpoints
+```
+
+## ☁️ Deployment ke Vercel
+
+Aplikasi ini berjalan sebagai **satu serverless function** Express di `api/index.js`.
+Semua request (API, halaman HTML, file statis) diarahkan ke function tersebut lewat
+rules `rewrites` pada `vercel.json`.
+
+### 1. Jalankan skema database di Supabase
+
+Buka **Supabase Dashboard → SQL Editor**, tempel dan jalankan seluruh isi file
+[`data/supabase_schema.sql`](data/supabase_schema.sql). Skema ini sudah mencakup tabel
+baru bernama `saas_settings` yang menggantikan file `data/saas_settings.json`
+(filesystem Vercel bersifat *read-only*, jadi konfigurasi tidak bisa disimpan ke file).
+
+Copy **Project URL** dan **service_role key** dari menu **Project Settings → API**.
+
+### 2. Siapkan environment variable di Vercel
+
+```bash
+npm install -g vercel
+vercel login
+vercel link          # hubungkan folder ke project Vercel
+```
+
+Atau lewat dashboard: **Project → Settings → Environment Variables**.
+
+| Key | Keterangan |
+| --- | --- |
+| `SUPABASE_URL` | Project URL dari Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | service_role key (**bukan** anon key) |
+| `JWT_SECRET` | String random minimal 32 karakter |
+| `FONNTE_TOKEN` | Token device Fonnte |
+| `ALLOWED_ORIGINS` | Domain Anda, mis. `https://gateway-anda.vercel.app` |
+| `APP_BASE_URL` | `https://gateway-anda.vercel.app` (untuk link reset password) |
+
+> **Penting:** `service_role` melewati Row Level Security. Kunci ini hanya boleh ada di
+> server. Jangan pernah ditaruh di kode front-end atau di repo publik.
+
+### 3. Deploy
+
+```bash
+vercel --prod
+```
+
+### 4. Catatan penting tentang serverless
+
+* **Tidak ada penyimpanan file.** Unggahan gambar QRIS diproses langsung di memory
+  (`multer.memoryStorage`) dan tidak pernah ditulis ke disk.
+* **Rate limiter in-memory tidak konsisten.** Peta `rateLimitMap` hidup di memory satu
+  instance, sedangkan Vercel menjalankan banyak instance. Pembatasan login/forgot-password
+  tetap ada sebagai pelindung, tapi tidak boleh diandalkan sebagai satu-satunya pertahanan
+  brute-force. Untuk production yang serius, pindahkan ke tabel Supabase atau layanan
+  seperti Upstash Redis.
+* **Cold start.** `jimp` + `qrcode` membuat bundle function berukuran besar. Request
+  pertama setelah periode idle akan lambat (detik-detik). Naikkan `memory` di
+  `vercel.json` (maks. 1769 MB pada paket Pro) bila decoding gambar sering gagal.
+* **Durasi.** `maxDuration` diset 60 detik. Naikkan bila Anda sudah di paket Pro.
+* **Body limit.** Batas request Vercel adalah 4.5 MB; limit upload aplikasi 3 MB.
+
+### 5. Develop lokal agar mirip Vercel
+
+```bash
+npm install -g vercel
+vercel env pull .env.local
+vercel dev
 ```
 
 ---
