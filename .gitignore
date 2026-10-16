@@ -3,6 +3,7 @@ node_modules/
 
 # Vercel
 .vercel
+deploy.log
 
 # Local env files
 .env
