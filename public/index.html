@@ -127,6 +127,7 @@
                                 <div class="input-group">
                                     <span class="input-group-text glass-input-group-text"><i class="fas fa-lock"></i></span>
                                     <input type="password" class="form-control glass-input" id="login-pass" placeholder="Password Anda" required>
+                                    <button type="button" class="input-group-text glass-eye-toggle" onclick="togglePass('login-pass', this)" title="Tampilkan password" aria-label="Tampilkan password"><i class="fas fa-eye"></i></button>
                                 </div>
                             </div>
                             
@@ -187,6 +188,7 @@
                                 <div class="input-group">
                                     <span class="input-group-text glass-input-group-text"><i class="fas fa-lock"></i></span>
                                     <input type="password" class="form-control glass-input" id="reg-pass" placeholder="Minimal 6 karakter" required>
+                                    <button type="button" class="input-group-text glass-eye-toggle" onclick="togglePass('reg-pass', this)" title="Tampilkan password" aria-label="Tampilkan password"><i class="fas fa-eye"></i></button>
                                 </div>
                             </div>
                             
@@ -196,17 +198,32 @@
                         </form>
 
                         <!-- Form 4: LUPA PASSWORD -->
-                        <div id="form-forgot" class="d-flex flex-column gap-3 hidden">
-                            <h4 class="text-white fw-bold mb-1">Reset Password</h4>
-                            <p class="text-white-50 small mb-2">Untuk melakukan reset password akun Anda, silakan hubungi Administrator kami melalui WhatsApp.</p>
-                            
-                            <a href="https://wa.me/6285849261085?text=Halo%20Admin,%20saya%20lupa%20password%20untuk%20akun%20gateway%20saya.%20Mohon%20bantuannya%20untuk%20reset%20password." target="_blank" class="btn w-100 py-3 mt-2 text-white fw-bold d-flex align-items-center justify-content-center gap-2" style="background-color: #25d366; border: none; border-radius: 12px; box-shadow: 0 4px 15px rgba(37, 211, 102, 0.3);">
-                                <i class="fab fa-whatsapp fs-5"></i> Hubungi Admin via WA
-                            </a>
+                        <form id="form-forgot" class="d-flex flex-column gap-3 hidden">
+                            <h4 class="text-white fw-bold mb-1">Lupa Password</h4>
+                            <p class="text-white-50 small mb-2">Masukkan nomor WhatsApp yang terdaftar. Kami akan mengirimkan link untuk membuat password baru.</p>
+
+                            <div>
+                                <label class="text-white-50 small mb-1 fw-bold">Nomor WhatsApp</label>
+                                <div class="input-group">
+                                    <span class="input-group-text glass-input-group-text"><i class="fas fa-phone"></i></span>
+                                    <input type="tel" class="form-control glass-input" id="forgot-wa" placeholder="08xxxxxxxxxx" required>
+                                </div>
+                            </div>
+
+                            <button type="submit" class="btn btn-glow w-100 py-3 mt-2" id="btnForgotSubmit">
+                                <i class="fas fa-paper-plane me-1"></i> Kirim Link Reset
+                            </button>
+
                             <button type="button" onclick="switchAuthMode('login')" class="btn btn-outline-light w-100 py-2">
                                 <i class="fas fa-arrow-left me-1"></i> Kembali ke Login
                             </button>
-                        </div>
+
+                            <div class="text-center">
+                                <a href="https://wa.me/6285849261085?text=Halo%20Admin,%20saya%20lupa%20password%20untuk%20akun%20gateway%20saya.%20Mohon%20bantuannya%20untuk%20reset%20password." target="_blank" class="text-white-50 small text-decoration-none">
+                                    <i class="fab fa-whatsapp me-1"></i> Tidak menerima link? Hubungi Admin
+                                </a>
+                            </div>
+                        </form>
 
                         <!-- Form 5: RESET PASSWORD FORM (TOKEN DI URL) -->
                         <form id="form-reset" class="d-flex flex-column gap-3 hidden">
@@ -218,6 +235,7 @@
                                 <div class="input-group">
                                     <span class="input-group-text glass-input-group-text"><i class="fas fa-lock"></i></span>
                                     <input type="password" class="form-control glass-input" id="reset-pass" placeholder="Password baru" required>
+                                    <button type="button" class="input-group-text glass-eye-toggle" onclick="togglePass('reset-pass', this)" title="Tampilkan password" aria-label="Tampilkan password"><i class="fas fa-eye"></i></button>
                                 </div>
                             </div>
                             

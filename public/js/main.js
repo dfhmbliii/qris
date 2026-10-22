@@ -49,6 +49,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // ==========================================
     // NAVIGASI SWITCH AUTH FORM
     // ==========================================
+    // Tampilkan / sembunyikan isi field password (ikon mata)
+    window.togglePass = function(inputId, btn) {
+        const el = document.getElementById(inputId);
+        if (!el) return;
+        const isHidden = el.type === 'password';
+        el.type = isHidden ? 'text' : 'password';
+        const icon = btn.querySelector('i');
+        if (icon) icon.className = isHidden ? 'fas fa-eye-slash' : 'fas fa-eye';
+        btn.setAttribute('title', isHidden ? 'Sembunyikan password' : 'Tampilkan password');
+        btn.setAttribute('aria-label', isHidden ? 'Sembunyikan password' : 'Tampilkan password');
+    };
+
     window.switchAuthMode = function(mode) {
         // Sembunyikan semua form
         document.getElementById('form-login').classList.add('hidden');
@@ -156,6 +168,37 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="fas fa-sign-in-alt me-1"></i> Masuk';
+        }
+    });
+
+    // 4. LUPA PASSWORD - KIRIM LINK RESET
+    document.getElementById('form-forgot')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const whatsappNumber = document.getElementById('forgot-wa').value;
+
+        const btn = document.getElementById('btnForgotSubmit');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Mengirim...';
+
+        try {
+            const res = await fetch('/api/auth/forgot-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ whatsappNumber })
+            });
+
+            const data = await res.json();
+            if (data.success) {
+                showToast('Terkirim', data.message || 'Jika nomor terdaftar, link reset telah dikirim ke WhatsApp Anda.');
+                document.getElementById('forgot-wa').value = '';
+            } else {
+                showToast('Gagal', data.message || 'Gagal mengirim link reset.', false);
+            }
+        } catch (err) {
+            showToast('Error', 'Gagal menghubungi server.', false);
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-paper-plane me-1"></i> Kirim Link Reset';
         }
     });
 
