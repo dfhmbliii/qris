@@ -61,7 +61,9 @@ document.addEventListener('DOMContentLoaded', () => {
         btn.setAttribute('aria-label', isHidden ? 'Sembunyikan password' : 'Tampilkan password');
     };
 
-    window.switchAuthMode = function(mode) {
+    // Dideklarasikan sebagai function declaration agar di-hoisting dan
+    // bisa dipanggil di blok deteksi ?token= (baris atas) sebelum baris ini dieksekusi.
+    function switchAuthMode(mode) {
         // Sembunyikan semua form
         document.getElementById('form-login').classList.add('hidden');
         document.getElementById('form-otp').classList.add('hidden');
@@ -90,7 +92,8 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('form-reset').classList.remove('hidden');
             document.getElementById('auth-tab-headers')?.classList.add('hidden');
         }
-    };
+    }
+    window.switchAuthMode = switchAuthMode;
 
     // ==========================================
     // ACTION FORM HANDLERS
